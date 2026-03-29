@@ -1,34 +1,42 @@
-import { requireNativeModule, EventEmitter } from "expo-modules-core";
+import { EventEmitter } from "expo-modules-core";
 import type { KmCertoOverlayEventPayload } from "./KmCertoNative.types";
 
-const NativeModule = requireNativeModule("KmCertoNative");
-const emitter = new EventEmitter(NativeModule);
+let NativeModule: any = null;
+let emitter: any = null;
+
+try {
+  const { requireNativeModule } = require("expo-modules-core");
+  NativeModule = requireNativeModule("KmCertoNative");
+  emitter = new EventEmitter(NativeModule);
+} catch (e) {
+  console.warn("KmCertoNative module not available:", e);
+}
 
 const KmCertoNativeModule = {
   isOverlayPermissionGranted: (): Promise<boolean> =>
-    NativeModule.isOverlayPermissionGranted(),
+    NativeModule?.isOverlayPermissionGranted() ?? Promise.resolve(false),
   isAccessibilityServiceEnabled: (): Promise<boolean> =>
-    NativeModule.isAccessibilityServiceEnabled(),
+    NativeModule?.isAccessibilityServiceEnabled() ?? Promise.resolve(false),
   openOverlaySettings: (): Promise<boolean> =>
-    NativeModule.openOverlaySettings(),
+    NativeModule?.openOverlaySettings() ?? Promise.resolve(false),
   openAccessibilitySettings: (): Promise<boolean> =>
-    NativeModule.openAccessibilitySettings(),
+    NativeModule?.openAccessibilitySettings() ?? Promise.resolve(false),
   startMonitoring: (): Promise<boolean> =>
-    NativeModule.startMonitoring(),
+    NativeModule?.startMonitoring() ?? Promise.resolve(false),
   stopMonitoring: (): Promise<boolean> =>
-    NativeModule.stopMonitoring(),
+    NativeModule?.stopMonitoring() ?? Promise.resolve(false),
   hideOverlay: (): Promise<boolean> =>
-    NativeModule.hideOverlay(),
+    NativeModule?.hideOverlay() ?? Promise.resolve(false),
   setMinimumPerKm: (value: number): Promise<boolean> =>
-    NativeModule.setMinimumPerKm(value),
+    NativeModule?.setMinimumPerKm(value) ?? Promise.resolve(false),
   getMinimumPerKm: (): Promise<number> =>
-    NativeModule.getMinimumPerKm(),
+    NativeModule?.getMinimumPerKm() ?? Promise.resolve(1.5),
   showTestOverlay: (payload: string): Promise<boolean> =>
-    NativeModule.showTestOverlay(payload),
+    NativeModule?.showTestOverlay(payload) ?? Promise.resolve(false),
   addListener: (
     event: "KmCertoOverlayData",
     listener: (payload: KmCertoOverlayEventPayload) => void
-  ) => emitter.addListener(event, listener),
+  ) => emitter?.addListener(event, listener) ?? { remove: () => {} },
 };
 
 export default KmCertoNativeModule;
