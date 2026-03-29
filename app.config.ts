@@ -103,7 +103,7 @@ const config: ExpoConfig = {
         },
       },
     ],
-    "./app/plugins/with-kmcerto-android.js",
+    "./plugins/with-kmcerto-android.js",
   ],
   experiments: {
     typedRoutes: true,
