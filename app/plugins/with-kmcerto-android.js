@@ -1,9 +1,4 @@
-const {
-  withAndroidManifest,
-  withDangerousMod,
-} = require("@expo/config-plugins");
-const fs = require("fs");
-const path = require("path");
+const { withAndroidManifest } = require("@expo/config-plugins");
 
 function withKmCertoManifest(config) {
   return withAndroidManifest(config, (config) => {
@@ -82,40 +77,6 @@ function withKmCertoManifest(config) {
   });
 }
 
-function withKmCertoAccessibilityXml(config) {
-  return withDangerousMod(config, [
-    "android",
-    (config) => {
-      const resXmlDir = path.join(
-        config.modRequest.platformProjectRoot,
-        "app", "src", "main", "res", "xml"
-      );
-
-      if (!fs.existsSync(resXmlDir)) {
-        fs.mkdirSync(resXmlDir, { recursive: true });
-      }
-
-      const destFile = path.join(resXmlDir, "kmcerto_accessibility_service_config.xml");
-
-      const xmlContent = `<?xml version="1.0" encoding="utf-8"?>
-<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-  android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged"
-  android:accessibilityFeedbackType="feedbackGeneric"
-  android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
-  android:canRetrieveWindowContent="true"
-  android:notificationTimeout="150"
-  android:packageNames="br.com.ifood.driver.app,com.app99.driver,com.ubercab.driver"
-  android:summary="KmCerto monitora ofertas de entrega para calcular viabilidade automaticamente." />
-`;
-
-      fs.writeFileSync(destFile, xmlContent, "utf8");
-      return config;
-    },
-  ]);
-}
-
 module.exports = function withKmcertoAndroid(config) {
-  config = withKmCertoManifest(config);
-  config = withKmCertoAccessibilityXml(config);
-  return config;
+  return withKmCertoManifest(config);
 };
