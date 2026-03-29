@@ -1,9 +1,0 @@
-{
-  "name": "kmcerto-native",
-  "version": "1.0.0",
-  "description": "KmCerto native module",
-  "main": "index.ts",
-  "peerDependencies": {
-    "expo-modules-core": "*"
-  }
-}
