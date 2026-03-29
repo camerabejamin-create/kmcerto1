@@ -1,29 +1,6 @@
-const { withAndroidManifest, withAppBuildGradle, withSettingsGradle } = require("@expo/config-plugins");
+const { withAndroidManifest } = require("@expo/config-plugins");
 
 module.exports = function withKmcertoAndroid(config) {
-  // Adiciona o módulo nativo ao settings.gradle
-  config = withSettingsGradle(config, (config) => {
-    if (!config.modResults.contents.includes(":kmcerto-native")) {
-      config.modResults.contents += `
-include ':kmcerto-native'
-project(':kmcerto-native').projectDir = new File(rootProject.projectDir, '../modules/kmcerto-native/android')
-`;
-    }
-    return config;
-  });
-
-  // Adiciona a dependência no build.gradle do app
-  config = withAppBuildGradle(config, (config) => {
-    if (!config.modResults.contents.includes("kmcerto-native")) {
-      config.modResults.contents = config.modResults.contents.replace(
-        /dependencies\s*\{/,
-        `dependencies {\n    implementation project(':kmcerto-native')`
-      );
-    }
-    return config;
-  });
-
-  // Adiciona permissões no AndroidManifest
   config = withAndroidManifest(config, (config) => {
     const manifest = config.modResults.manifest;
     const permissions = [
