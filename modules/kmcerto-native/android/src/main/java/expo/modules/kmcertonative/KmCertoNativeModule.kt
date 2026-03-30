@@ -42,19 +42,19 @@ class KmCertoNativeModule : Module() {
     Events("KmCertoOverlayData")
 
     AsyncFunction("isOverlayPermissionGranted") {
-      val context = appContext.reactContext ?: return@AsyncFunction false
+      val context = (appContext.reactContext as? ReactContext) ?: return@AsyncFunction false
       KmCertoRuntime.bindReactContext(context)
       Settings.canDrawOverlays(context)
     }
 
     AsyncFunction("isAccessibilityServiceEnabled") {
-      val context = appContext.reactContext ?: return@AsyncFunction false
+      val context = (appContext.reactContext as? ReactContext) ?: return@AsyncFunction false
       KmCertoRuntime.bindReactContext(context)
       KmCertoAccessibilityService.isEnabled(context)
     }
 
     AsyncFunction("openOverlaySettings") {
-      val context = appContext.reactContext ?: return@AsyncFunction false
+      val context = (appContext.reactContext as? ReactContext) ?: return@AsyncFunction false
       KmCertoRuntime.bindReactContext(context)
       try {
         val intent = Intent(
@@ -71,7 +71,7 @@ class KmCertoNativeModule : Module() {
     }
 
     AsyncFunction("openAccessibilitySettings") {
-      val context = appContext.reactContext ?: return@AsyncFunction false
+      val context = (appContext.reactContext as? ReactContext) ?: return@AsyncFunction false
       KmCertoRuntime.bindReactContext(context)
       try {
         val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
@@ -85,14 +85,14 @@ class KmCertoNativeModule : Module() {
     }
 
     AsyncFunction("startMonitoring") {
-      val context = appContext.reactContext ?: return@AsyncFunction false
+      val context = (appContext.reactContext as? ReactContext) ?: return@AsyncFunction false
       KmCertoRuntime.bindReactContext(context)
       KmCertoRuntime.setMonitoringEnabled(context, true)
       true
     }
 
     AsyncFunction("stopMonitoring") {
-      val context = appContext.reactContext ?: return@AsyncFunction false
+      val context = (appContext.reactContext as? ReactContext) ?: return@AsyncFunction false
       KmCertoRuntime.bindReactContext(context)
       KmCertoRuntime.setMonitoringEnabled(context, false)
       KmCertoOverlayService.stop(context)
@@ -100,27 +100,27 @@ class KmCertoNativeModule : Module() {
     }
 
     AsyncFunction("hideOverlay") {
-      val context = appContext.reactContext ?: return@AsyncFunction false
+      val context = (appContext.reactContext as? ReactContext) ?: return@AsyncFunction false
       KmCertoRuntime.bindReactContext(context)
       KmCertoOverlayService.stop(context)
       true
     }
 
     AsyncFunction("setMinimumPerKm") { value: Double ->
-      val context = appContext.reactContext ?: return@AsyncFunction false
+      val context = (appContext.reactContext as? ReactContext) ?: return@AsyncFunction false
       KmCertoRuntime.bindReactContext(context)
       KmCertoRuntime.setMinimumPerKm(context, value)
       true
     }
 
     AsyncFunction("getMinimumPerKm") {
-      val context = appContext.reactContext ?: return@AsyncFunction KmCertoRuntime.DEFAULT_MINIMUM_PER_KM
+      val context = (appContext.reactContext as? ReactContext) ?: return@AsyncFunction KmCertoRuntime.DEFAULT_MINIMUM_PER_KM
       KmCertoRuntime.bindReactContext(context)
       KmCertoRuntime.getMinimumPerKm(context)
     }
 
     AsyncFunction("showTestOverlay") { payload: String? ->
-      val context = appContext.reactContext ?: return@AsyncFunction false
+      val context = (appContext.reactContext as? ReactContext) ?: return@AsyncFunction false
       KmCertoRuntime.bindReactContext(context)
       val parsed = KmCertoOfferParser.fromJsonPayload(
         payload = payload,
@@ -259,7 +259,7 @@ data class OfferDecisionData(
 
 object KmCertoOfferParser {
   private val locale = Locale("pt", "BR")
-  private val currencyRegex = Regex("""R\\$\\s*([0-9]{1,4}(?:[.][0-9]{3})*(?:,[0-9]{2})|[0-9]+(?:[.,][0-9]{1,2})?)""")
+  private val currencyRegex = Regex("""R\$\s*([0-9]{1,4}(?:[.][0-9]{3})*(?:,[0-9]{2})|[0-9]+(?:[.,][0-9]{1,2})?)""")
   private val kmRegex = Regex("""(\d{1,3}(?:[.,]\d{1,2})?)\s?km\b""", RegexOption.IGNORE_CASE)
   private val minuteRegex = Regex("""(\d{1,3})\s?min(?:uto)?s?\b""", RegexOption.IGNORE_CASE)
   private val explicitTotalKmRegex = Regex("""(?:dist[âa]ncia\s+total|total)\s*(\d{1,3}(?:[.,]\d{1,2})?)\s?km""", RegexOption.IGNORE_CASE)
@@ -339,7 +339,6 @@ object KmCertoOfferParser {
   private fun selectDistance(values: List<Double>): Double? {
     if (values.isEmpty()) return null
     if (values.size == 1) return values.first()
-
     val firstTwo = values.take(2)
     val sum = firstTwo.sum()
     return when {
@@ -351,7 +350,6 @@ object KmCertoOfferParser {
   private fun selectMinutes(values: List<Double>): Double? {
     if (values.isEmpty()) return null
     if (values.size == 1) return values.first()
-
     val firstTwo = values.take(2)
     val sum = firstTwo.sum()
     return when {
@@ -433,13 +431,10 @@ class KmCertoAccessibilityService : AccessibilityService() {
 
     fun visit(node: AccessibilityNodeInfo?) {
       if (node == null) return
-
       val text = node.text?.toString()?.trim().orEmpty()
       if (text.isNotBlank()) parts += text
-
       val contentDescription = node.contentDescription?.toString()?.trim().orEmpty()
       if (contentDescription.isNotBlank()) parts += contentDescription
-
       for (index in 0 until node.childCount) {
         visit(node.getChild(index))
       }
@@ -455,7 +450,6 @@ class KmCertoAccessibilityService : AccessibilityService() {
         context.contentResolver,
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
       ) ?: return false
-
       val expected = "${context.packageName}/${KmCertoAccessibilityService::class.java.name}"
       return TextUtils.SimpleStringSplitter(':').run {
         setString(enabledServices)
@@ -485,20 +479,17 @@ class KmCertoOverlayService : Service() {
         stopSelf()
         return START_NOT_STICKY
       }
-
       ACTION_SHOW -> {
         if (!Settings.canDrawOverlays(this)) {
           stopSelf()
           return START_NOT_STICKY
         }
-
         val payload = OfferDecisionData.fromJson(intent.getStringExtra(EXTRA_PAYLOAD)) ?: return START_NOT_STICKY
         startForegroundInternal()
         showOverlayInternal(payload)
         return START_NOT_STICKY
       }
     }
-
     return START_NOT_STICKY
   }
 
@@ -511,15 +502,10 @@ class KmCertoOverlayService : Service() {
   private fun startForegroundInternal() {
     val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      val channel = NotificationChannel(
-        CHANNEL_ID,
-        "KmCerto Overlay",
-        NotificationManager.IMPORTANCE_LOW,
-      )
+      val channel = NotificationChannel(CHANNEL_ID, "KmCerto Overlay", NotificationManager.IMPORTANCE_LOW)
       channel.description = "Canal do overlay automático do KmCerto."
       manager.createNotificationChannel(channel)
     }
-
     val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       Notification.Builder(this, CHANNEL_ID)
         .setContentTitle("KmCerto ativo")
@@ -536,7 +522,6 @@ class KmCertoOverlayService : Service() {
         .setOngoing(true)
         .build()
     }
-
     startForeground(NOTIFICATION_ID, notification)
   }
 
@@ -551,10 +536,8 @@ class KmCertoOverlayService : Service() {
 
   private fun showOverlayInternal(data: OfferDecisionData) {
     hideOverlayInternal()
-
     val manager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
     windowManager = manager
-
     val container = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       gravity = Gravity.CENTER_HORIZONTAL
@@ -564,7 +547,6 @@ class KmCertoOverlayService : Service() {
         cornerRadius = dp(24).toFloat()
       }
     }
-
     val fareText = TextView(this).apply {
       text = data.totalFareLabel
       setTextColor(Color.WHITE)
@@ -572,7 +554,6 @@ class KmCertoOverlayService : Service() {
       setTypeface(typeface, Typeface.BOLD)
       gravity = Gravity.CENTER_HORIZONTAL
     }
-
     val statusText = TextView(this).apply {
       text = data.status
       setTextColor(Color.WHITE)
@@ -585,14 +566,12 @@ class KmCertoOverlayService : Service() {
         cornerRadius = dp(999).toFloat()
       }
     }
-
     val sourceText = TextView(this).apply {
       text = data.sourceApp
       setTextColor(Color.parseColor("#CFCFD4"))
       setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
       gravity = Gravity.CENTER_HORIZONTAL
     }
-
     val metricRow = LinearLayout(this).apply {
       orientation = LinearLayout.HORIZONTAL
       gravity = Gravity.CENTER
@@ -603,11 +582,9 @@ class KmCertoOverlayService : Service() {
         setColor(Color.TRANSPARENT)
       }
     }
-
     metricRow.addView(createMetricText("R$/km", data.perKm))
     data.perHour?.let { metricRow.addView(createMetricText("R$/hr", it)) }
     data.perMinute?.let { metricRow.addView(createMetricText("R$/min", it)) }
-
     container.addView(statusText)
     container.addView(spaceView(dp(10)))
     container.addView(fareText)
@@ -615,7 +592,6 @@ class KmCertoOverlayService : Service() {
     container.addView(sourceText)
     container.addView(spaceView(dp(14)))
     container.addView(metricRow)
-
     val layoutParams = WindowManager.LayoutParams(
       WindowManager.LayoutParams.MATCH_PARENT,
       WindowManager.LayoutParams.WRAP_CONTENT,
@@ -636,7 +612,6 @@ class KmCertoOverlayService : Service() {
       width = WindowManager.LayoutParams.MATCH_PARENT
       horizontalMargin = 0f
     }
-
     try {
       manager.addView(container, layoutParams)
       overlayView = container
@@ -652,10 +627,7 @@ class KmCertoOverlayService : Service() {
   private fun hideOverlayInternal() {
     handler.removeCallbacks(dismissRunnable)
     overlayView?.let { view ->
-      try {
-        windowManager?.removeView(view)
-      } catch (_: Throwable) {
-      }
+      try { windowManager?.removeView(view) } catch (_: Throwable) { }
     }
     overlayView = null
   }
@@ -681,9 +653,7 @@ class KmCertoOverlayService : Service() {
   }
 
   private fun spaceView(height: Int): TextView {
-    return TextView(this).apply {
-      minHeight = height
-    }
+    return TextView(this).apply { minHeight = height }
   }
 
   private fun dp(value: Int): Int {
@@ -703,25 +673,20 @@ class KmCertoOverlayService : Service() {
         action = ACTION_SHOW
         putExtra(EXTRA_PAYLOAD, payload.toJson())
       }
-
       try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
           context.startForegroundService(intent)
         } else {
           context.startService(intent)
         }
-      } catch (_: Throwable) {
-      }
+      } catch (_: Throwable) { }
     }
 
     fun stop(context: Context) {
       val intent = Intent(context, KmCertoOverlayService::class.java).apply {
         action = ACTION_HIDE
       }
-      try {
-        context.startService(intent)
-      } catch (_: Throwable) {
-      }
+      try { context.startService(intent) } catch (_: Throwable) { }
     }
   }
 }
