@@ -1,7 +1,7 @@
 package expo.modules.kmcertonative
 
 import android.content.Context
-
+import android.os.Environment
 import android.util.Log
 import java.io.File
 import java.text.SimpleDateFormat
@@ -33,6 +33,9 @@ object KmCertoLogger {
         if (logFile?.exists() == true && logFile!!.length() > MAX_LOG_SIZE_BYTES) {
             logFile = File(logDir, "kmcerto_debug_${sdf.format(Date())}.txt")
         }
+
+        // Exportar automaticamente para /sdcard para acesso fácil
+        exportToSdcard()
     }
 
     fun log(message: String) {
@@ -41,10 +44,22 @@ object KmCertoLogger {
         Log.d("KmCerto", message)
         try {
             logFile?.appendText(line)
+            exportToSdcard()
         } catch (e: Throwable) {
             Log.e("KmCertoLogger", "Erro ao escrever no arquivo de log: ${e.message}")
         }
     }
 
     fun getLogPath(): String = logFile?.absolutePath ?: "N/A"
+
+    fun exportToSdcard() {
+        try {
+            val sdcard = Environment.getExternalStorageDirectory()
+            val dest = File(sdcard, "kmcerto_log.txt")
+            logFile?.copyTo(dest, overwrite = true)
+            Log.d("KmCertoLogger", "Log exportado para: ${dest.absolutePath}")
+        } catch (e: Throwable) {
+            Log.e("KmCertoLogger", "Erro ao exportar log: ${e.message}")
+        }
+    }
 }
