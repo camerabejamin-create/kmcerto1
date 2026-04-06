@@ -125,6 +125,22 @@ const KmCertoNativeModule = {
       return Promise.resolve(1.5);
     }
   },
+  getLogPath: (): Promise<string> => {
+    if (!NativeModule) return Promise.resolve("N/A");
+    try {
+      return NativeModule.getLogPath();
+    } catch {
+      return Promise.resolve("N/A");
+    }
+  },
+  clearLog: (): Promise<boolean> => {
+    if (!NativeModule) return Promise.resolve(false);
+    try {
+      return NativeModule.clearLog();
+    } catch {
+      return Promise.resolve(false);
+    }
+  },
   showTestOverlay: (payload: string): Promise<boolean> => {
     if (!NativeModule) return Promise.resolve(false);
     try {
