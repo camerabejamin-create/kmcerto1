@@ -214,6 +214,8 @@ object KmCertoRuntime {
     "br.com.ifood.driver.app" to "iFood",
     "com.app99.driver" to "99Food",
     "com.ubercab.driver" to "Uber",
+    "com.app99.driver.motorista" to "99",
+    "com.app99.driver.motorista.partner" to "99"
   )
 
   fun setMinimumPerKm(context: Context, value: Double) {
@@ -254,11 +256,11 @@ object KmCertoRuntime {
   }
 
   fun supportsPackage(packageName: String): Boolean {
-    return supportedPackages.keys.any { key -> packageName == key || packageName.startsWith("$key:") }
+    return supportedPackages.keys.any { key -> packageName == key || packageName.startsWith("$key:") || packageName.contains(key) }
   }
 
   fun sourceLabel(packageName: String): String {
-    return supportedPackages.entries.firstOrNull { packageName == it.key || packageName.startsWith("${it.key}:") }
+    return supportedPackages.entries.firstOrNull { packageName == it.key || packageName.startsWith("${it.key}:") || packageName.contains(it.key) }
       ?.value
       ?: packageName.substringAfterLast('.')
   }
@@ -301,19 +303,17 @@ data class OfferDecisionData(
         OfferDecisionData(
           totalFare = payload.optDouble("totalFare", Double.NaN),
           totalFareLabel = payload.optString("totalFareLabel", ""),
-          status = payload.optString("status", "RECUSAR"),
-          statusColor = payload.optString("statusColor", "#DC2626"),
-          perKm = payload.optDouble("perKm", Double.NaN),
-          perHour = if (payload.has("perHour") && !payload.isNull("perHour")) payload.optDouble("perHour") else null,
-          perMinute = if (payload.has("perMinute") && !payload.isNull("perMinute")) payload.optDouble("perMinute") else null,
+          status = payload.optString("status", ""),
+          statusColor = payload.optString("statusColor", "#FFFFFF"),
+          perKm = payload.optDouble("perKm", 0.0),
+          perHour = if (payload.has("perHour")) payload.getDouble("perHour") else null,
+          perMinute = if (payload.has("perMinute")) payload.getDouble("perMinute") else null,
           minimumPerKm = payload.optDouble("minimumPerKm", 1.5),
           sourceApp = payload.optString("sourceApp", "Desconhecido"),
           rawText = payload.optString("rawText", ""),
-          distanceKm = if (payload.has("distanceKm")) payload.optDouble("distanceKm") else null
+          distanceKm = if (payload.has("distanceKm")) payload.getDouble("distanceKm") else null
         )
-      } catch (_: Throwable) {
-        null
-      }
+      } catch (_: Throwable) { null }
     }
   }
 }
@@ -323,183 +323,120 @@ object KmCertoOfferParser {
     if (payload.isNullOrBlank()) return null
     return try {
       val json = JSONObject(payload)
-      val fare = json.optDouble("totalFare", 0.0)
-      val distance = json.optDouble("totalDistance", 0.0)
-      val minutes = json.optDouble("totalMinutes", 0.0)
-      val source = json.optString("sourceApp", "Manual")
-      val raw = json.optString("rawText", "")
+      val totalFare = json.optDouble("totalFare", 0.0)
+      val distanceKm = json.optDouble("distanceKm", 0.0)
+      val perKm = if (distanceKm > 0) totalFare / distanceKm else 0.0
+      val isGood = perKm >= minimumPerKm
 
-      calculate(fare, distance, minutes, minimumPerKm, source, raw)
-    } catch (_: Throwable) {
-      null
-    }
+      OfferDecisionData(
+        totalFare = totalFare,
+        totalFareLabel = "R$ %.2f".format(totalFare),
+        status = if (isGood) "ACEITAR" else "RECUSAR",
+        statusColor = if (isGood) "#4CAF50" else "#F44336",
+        perKm = perKm,
+        perHour = null,
+        perMinute = null,
+        minimumPerKm = minimumPerKm,
+        sourceApp = json.optString("sourceApp", "Teste"),
+        rawText = payload,
+        distanceKm = distanceKm
+      )
+    } catch (_: Throwable) { null }
   }
 
   fun parseFromText(text: String, minimumPerKm: Double, sourceApp: String): OfferDecisionData? {
-    if (text.isBlank()) return null
-
-    val fare = findFare(text) ?: return null
-    val distance = findDistance(text) ?: return null
-    val minutes = findMinutes(text)
-
-    return calculate(fare, distance, minutes, minimumPerKm, sourceApp, text)
-  }
-
-  private fun calculate(
-    fare: Double,
-    distance: Double,
-    minutes: Double?,
-    minimumPerKm: Double,
-    sourceApp: String,
-    rawText: String
-  ): OfferDecisionData {
-    val perKm = if (distance > 0) fare / distance else 0.0
-    val perHour = if (minutes != null && minutes > 0) (fare / minutes) * 60 else null
-    val perMinute = if (minutes != null && minutes > 0) fare / minutes else null
-
-    val isAccepted = perKm >= minimumPerKm
-    val status = if (isAccepted) "ACEITAR" else "RECUSAR"
-    val statusColor = if (isAccepted) "#16A34A" else "#DC2626"
-
-    return OfferDecisionData(
-      totalFare = fare,
-      totalFareLabel = "R$ ${String.format("%.2f", fare)}",
-      status = status,
-      statusColor = statusColor,
-      perKm = perKm,
-      perHour = perHour,
-      perMinute = perMinute,
-      minimumPerKm = minimumPerKm,
-      sourceApp = sourceApp,
-      rawText = rawText,
-      distanceKm = distance
-    )
-  }
-
-  private fun findFare(text: String): Double? {
-    val regex = Regex("""(?:R\$|RS|S|R)\s*(\d+[\.,]\d{2})""", RegexOption.IGNORE_CASE)
-    return regex.find(text)?.groupValues?.get(1)?.replace(",", ".")?.toDoubleOrNull()
-  }
-
-  private fun findDistance(text: String): Double? {
-    val regex = Regex("""(\d+[\.,]\d+)\s*(?:km|k\s*m)""", RegexOption.IGNORE_CASE)
-    return regex.find(text)?.groupValues?.get(1)?.replace(",", ".")?.toDoubleOrNull()
-  }
-
-  private fun findMinutes(text: String): Double? {
-    val regex = Regex("""(\d+)\s*(?:min|m\s*i\s*n)""", RegexOption.IGNORE_CASE)
-    return regex.find(text)?.groupValues?.get(1)?.toDoubleOrNull()
+    val cleanText = text.replace("\n", " ").replace(",", ".")
+    
+    val fareRegex = Regex("""R\$\s?(\d+[\d.]*)""")
+    val distanceRegex = Regex("""(\d+[\d.]*)\s?km""", RegexOption.IGNORE_CASE)
+    
+    val fareMatch = fareRegex.find(cleanText)
+    val distanceMatch = distanceRegex.find(cleanText)
+    
+    if (fareMatch != null && distanceMatch != null) {
+      val totalFare = fareMatch.groupValues[1].toDoubleOrNull() ?: return null
+      val distanceKm = distanceMatch.groupValues[1].toDoubleOrNull() ?: return null
+      
+      if (distanceKm <= 0) return null
+      
+      val perKm = totalFare / distanceKm
+      val isGood = perKm >= minimumPerKm
+      
+      return OfferDecisionData(
+        totalFare = totalFare,
+        totalFareLabel = "R$ %.2f".format(totalFare),
+        status = if (isGood) "ACEITAR" else "RECUSAR",
+        statusColor = if (isGood) "#4CAF50" else "#F44336",
+        perKm = perKm,
+        perHour = null,
+        perMinute = null,
+        minimumPerKm = minimumPerKm,
+        sourceApp = sourceApp,
+        rawText = text,
+        distanceKm = distanceKm
+      )
+    }
+    return null
   }
 }
 
 class KmCertoAccessibilityService : AccessibilityService() {
   private var wakeLock: PowerManager.WakeLock? = null
-  private var lastOcrAttemptTime: Long = 0L
-  private var ocrNoPermissionLogged: Boolean = false
-  private var lastTextProcessTime: Long = 0L
+  private var lastProcessTime = 0L
+  private var lastOcrTime = 0L
+  private var lastOcrStatusLog = 0L
 
   companion object {
-    private const val OCR_COOLDOWN_MS = 10_000L
-    private const val TEXT_COOLDOWN_MS = 1_000L
-
     fun isEnabled(context: Context): Boolean {
-      val expectedComponentName = android.content.ComponentName(context, KmCertoAccessibilityService::class.java)
-      val enabledServices = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
-      val colonSplitter = TextUtils.SimpleStringSplitter(':')
-      colonSplitter.setString(enabledServices)
-      while (colonSplitter.hasNext()) {
-        val componentName = colonSplitter.next()
-        if (componentName.equals(expectedComponentName.flattenToString(), ignoreCase = true)) return true
-      }
-      return false
+      val expected = "${context.packageName}/${KmCertoAccessibilityService::class.java.canonicalName}"
+      val enabledServices = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+      return enabledServices?.contains(expected) == true
     }
   }
 
   override fun onServiceConnected() {
-    super.onServiceConnected()
     val info = AccessibilityServiceInfo().apply {
-      eventTypes = AccessibilityEvent.TYPES_ALL_MASK
+      eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
       feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-      flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-              AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-              AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+      flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
       notificationTimeout = 100
     }
     this.serviceInfo = info
-    
     val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "KmCerto::WakeLock")
-    
+    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "KmCerto:AccessibilityWakeLock")
+    wakeLock?.acquire(10 * 60 * 1000L)
     KmCertoLogger.init(this)
-    KmCertoLogger.log("Serviço de Acessibilidade Conectado")
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        val channelId = "kmcerto_monitoring"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(channelId, "KmCerto Monitoramento", NotificationManager.IMPORTANCE_LOW)
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(channel)
-        }
-
-        val notification = Notification.Builder(this, channelId)
-            .setContentTitle("KmCerto Ativo")
-            .setContentText("Monitorando ofertas em tempo real")
-            .setSmallIcon(android.R.drawable.ic_menu_view)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(1001, notification)
-        }
-    }
+    KmCertoLogger.log("SERVIÇO ACESSIBILIDADE: Conectado")
   }
 
   override fun onAccessibilityEvent(event: AccessibilityEvent) {
     if (!KmCertoRuntime.isMonitoringEnabled(this)) return
-
     val packageName = event.packageName?.toString() ?: return
     if (!KmCertoRuntime.supportsPackage(packageName)) return
 
     val now = System.currentTimeMillis()
-    if (now - lastTextProcessTime < TEXT_COOLDOWN_MS) return
-    lastTextProcessTime = now
+    if (now - lastProcessTime < 1000) return
+    lastProcessTime = now
 
-    wakeLock?.acquire(10 * 60 * 1000L /*10 minutes*/)
+    val rootNode = rootInActiveWindow ?: return
+    val sb = StringBuilder()
+    collectTextRecursive(rootNode, sb)
+    val text = sb.toString()
 
-    val allText = StringBuilder()
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-      windows.forEach { window ->
-        collectTextRecursive(window.root, allText)
-      }
-    }
-
-    if (allText.isEmpty()) {
-      collectTextRecursive(rootInActiveWindow, allText)
-    }
-
-    if (allText.isEmpty()) {
-      event.text.forEach { allText.append(it).append(" ") }
-    }
-
-    val text = allText.toString()
     if (text.isNotBlank()) {
       processText(text, packageName)
-    }
-    
-    val needsOcr = packageName.contains("uber") || packageName.contains("app99")
-    if (needsOcr && text.isBlank()) {
-      if (now - lastOcrAttemptTime >= OCR_COOLDOWN_MS) {
-        lastOcrAttemptTime = now
-        
+    } else {
+      // Se a acessibilidade falhar em ler o texto, tenta o OCR com cooldown
+      if (now - lastOcrTime > 10000) {
+        lastOcrTime = now
         if (KmCertoScreenCapture.isProjectionAlive()) {
-          ocrNoPermissionLogged = false
-          KmCertoScreenCapture.captureAndProcess(this, packageName)
+            KmCertoLogger.log("OCR_TENTATIVA pkg=$packageName - janela vazia, iniciando captura de tela")
+            KmCertoScreenCapture.captureAndProcess(this, packageName)
         } else {
-          if (!ocrNoPermissionLogged) {
-            KmCertoLogger.log("OCR_INFO: MediaProjection não disponível em memória. Tentando reconectar...")
-            ocrNoPermissionLogged = true
-          }
+            if (now - lastOcrStatusLog > 30000) {
+                KmCertoLogger.log("OCR_SEM_PERMISSAO - peça permissão de gravação de tela no app")
+                lastOcrStatusLog = now
+            }
         }
       }
     }
@@ -512,7 +449,11 @@ class KmCertoAccessibilityService : AccessibilityService() {
     if (!text.isNullOrBlank()) out.append(text).append(" ")
     if (!contentDesc.isNullOrBlank()) out.append(contentDesc).append(" ")
     for (i in 0 until node.childCount) {
-      collectTextRecursive(node.getChild(i), out)
+      val child = node.getChild(i)
+      if (child != null) {
+        collectTextRecursive(child, out)
+        child.recycle()
+      }
     }
   }
 
@@ -613,10 +554,6 @@ class KmCertoScreenCaptureService : Service() {
 }
 
 object KmCertoScreenCapture {
-    // =====================================================================
-    // TOKEN GLOBAL (STATIC): Agora o token é compartilhado entre todos os
-    // serviços do app, garantindo que o AccessibilityService consiga usá-lo.
-    // =====================================================================
     @Volatile
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -780,66 +717,72 @@ class KmCertoOverlayService : Service() {
                         background = GradientDrawable().apply {
                             setColor(Color.parseColor("#1D2026"))
                             cornerRadius = 40f
-                            setStroke(4, Color.parseColor("#2D313A"))
+                            setStroke(4, Color.parseColor(data.statusColor))
                         }
+                        gravity = Gravity.CENTER_HORIZONTAL
                     }
-                    val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-                    header.addView(TextView(context).apply {
+
+                    val title = TextView(context).apply {
                         text = data.sourceApp
-                        setTextColor(Color.parseColor("#9CA3AF"))
-                        textSize = 12f
-                        typeface = Typeface.DEFAULT_BOLD
-                    }, LinearLayout.LayoutParams(0, -2, 1f))
-                    header.addView(TextView(context).apply {
-                        text = data.status
                         setTextColor(Color.WHITE)
-                        textSize = 12f
-                        typeface = Typeface.DEFAULT_BOLD
-                        setPadding(20, 5, 20, 5)
-                        background = GradientDrawable().apply {
-                            setColor(Color.parseColor(data.statusColor))
-                            cornerRadius = 12f
-                        }
-                    })
-                    view.addView(header)
-                    view.addView(TextView(context).apply {
+                        textSize = 14f
+                        alpha = 0.7f
+                    }
+                    view.addView(title)
+
+                    val fare = TextView(context).apply {
                         text = data.totalFareLabel
                         setTextColor(Color.WHITE)
                         textSize = 32f
-                        typeface = Typeface.DEFAULT_BOLD
-                        setPadding(0, 10, 0, 10)
-                    })
-                    view.addView(TextView(context).apply {
-                        text = "R$ ${String.format("%.2f", data.perKm)}/km"
-                        setTextColor(Color.parseColor("#F5D400"))
-                        textSize = 16f
-                        typeface = Typeface.DEFAULT_BOLD
-                    })
+                        setTypeface(null, Typeface.BOLD)
+                    }
+                    view.addView(fare)
+
+                    val perKm = TextView(context).apply {
+                        text = "R$ %.2f/km".format(data.perKm)
+                        setTextColor(Color.parseColor(data.statusColor))
+                        textSize = 18f
+                        setTypeface(null, Typeface.BOLD)
+                    }
+                    view.addView(perKm)
+
+                    val status = TextView(context).apply {
+                        text = data.status
+                        setTextColor(Color.WHITE)
+                        textSize = 20f
+                        setTypeface(null, Typeface.BOLD)
+                        setPadding(0, 20, 0, 0)
+                    }
+                    view.addView(status)
+
                     val params = WindowManager.LayoutParams(
-                        (context.resources.displayMetrics.widthPixels * 0.9).toInt(),
+                        WindowManager.LayoutParams.WRAP_CONTENT,
                         WindowManager.LayoutParams.WRAP_CONTENT,
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
                         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
                         PixelFormat.TRANSLUCENT
-                    ).apply { gravity = Gravity.TOP; y = 100 }
+                    ).apply {
+                        gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                        y = 100
+                    }
+
                     wm.addView(view, params)
                     overlayView = view
-                    Handler(Looper.getMainLooper()).postDelayed({ stop(context) }, 15000)
-                } catch (e: Exception) { KmCertoLogger.log("ERRO OVERLAY: ${e.message}") }
+
+                    Handler(Looper.getMainLooper()).postDelayed({ stop(context) }, 8000)
+                } catch (_: Throwable) {}
             }
         }
+
         fun stop(context: Context) {
             Handler(Looper.getMainLooper()).post {
                 try {
                     val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                    overlayView?.let { wm.removeView(it); overlayView = null }
-                } catch (_: Exception) {}
+                    overlayView?.let { wm.removeView(it) }
+                    overlayView = null
+                } catch (_: Throwable) {}
             }
         }
     }
-    override fun onBind(intent: Intent?): IBinder? = null
-}
-
-class KmCertoFloatingBubbleService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 }
