@@ -93,23 +93,6 @@ const withKmCertoManifest = (config) => {
       ],
     });
 
-    // 4. Floating Bubble Service (specialUse)
-    mainApplication.service.push({
-      $: {
-        "android:name": "expo.modules.kmcertonative.KmCertoFloatingBubbleService",
-        "android:exported": "false",
-        "android:foregroundServiceType": "specialUse",
-      },
-      property: [
-        {
-          $: {
-            "android:name": "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE",
-            "android:value": "floating_indicator",
-          },
-        },
-      ],
-    });
-
     // Adicionar KmCertoPermissionActivity
     if (!mainApplication.activity) mainApplication.activity = [];
     const hasPermActivity = mainApplication.activity.some(
