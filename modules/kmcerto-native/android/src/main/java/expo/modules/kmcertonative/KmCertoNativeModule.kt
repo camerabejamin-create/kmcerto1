@@ -700,23 +700,6 @@ class KmCertoPermissionActivity : Activity() {
     }
 }
 
-object KmCertoLogger {
-  private var logFile: File? = null
-  private val sdf = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
-  fun init(context: Context) {
-    val dir = context.getExternalFilesDir(null) ?: context.filesDir
-    logFile = File(dir, "kmcerto_debug.txt")
-    if (logFile?.exists() == true && logFile!!.length() > 1024 * 1024) logFile?.delete()
-  }
-  fun log(message: String) {
-    val time = sdf.format(Date())
-    val line = "[$time] $message\n"
-    Log.d("KmCerto", message)
-    try { logFile?.appendText(line) } catch (_: Throwable) {}
-  }
-  fun getLogPath(): String = logFile?.absolutePath ?: "N/A"
-}
-
 class KmCertoOverlayService : Service() {
     companion object {
         private var overlayView: LinearLayout? = null
