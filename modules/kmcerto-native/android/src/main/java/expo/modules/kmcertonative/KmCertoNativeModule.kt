@@ -569,7 +569,9 @@ object KmCertoScreenCapture {
     fun isProjectionAlive(): Boolean = mediaProjection != null
 
     fun hasPermission(context: Context): Boolean {
-        return mediaProjection != null || KmCertoRuntime.isScreenCaptureGranted(context)
+        // Só retorna true se o token real está vivo em memória
+        // SharedPreferences sozinho não é suficiente — token morre ao reiniciar
+        return mediaProjection != null
     }
 
     fun requestPermission(context: Context) {
@@ -583,9 +585,16 @@ object KmCertoScreenCapture {
         mediaProjection = projection
         projection.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
-                KmCertoLogger.log("CAPTURA DE TELA: Token expirado")
+                KmCertoLogger.log("CAPTURA DE TELA: Token expirado — limpando estado")
                 releaseProjection()
                 KmCertoRuntime.setScreenCaptureGranted(context, false)
+                // Auto-recovery: abre Activity de permissão automaticamente
+                Handler(Looper.getMainLooper()).postDelayed({
+                    try {
+                        KmCertoLogger.log("CAPTURA DE TELA: Tentando recuperar permissão automaticamente...")
+                        requestPermission(context)
+                    } catch (_: Throwable) {}
+                }, 1000)
             }
         }, Handler(Looper.getMainLooper()))
         
@@ -669,11 +678,17 @@ object KmCertoScreenCapture {
         recognizer.process(image)
             .addOnSuccessListener { visionText ->
                 val text = visionText.text
+                KmCertoLogger.log("OCR_RESULTADO tamanho=${text.length} | ${text.replace("\n", " | ")}")
                 if (text.isNotBlank()) {
                     val minimumPerKm = KmCertoRuntime.getMinimumPerKm(context)
                     val sourceApp = KmCertoRuntime.sourceLabel(packageName)
                     val offer = KmCertoOfferParser.parseFromText(text, minimumPerKm, sourceApp)
-                    if (offer != null) KmCertoOverlayService.show(context, offer)
+                    if (offer != null) {
+                        KmCertoLogger.log("OCR_PARSE_OK ${offer.totalFareLabel} | ${offer.distanceKm}km | ${offer.status}")
+                        KmCertoOverlayService.show(context, offer)
+                    } else {
+                        KmCertoLogger.log("OCR_PARSE_FALHOU — R\$ ou km não encontrado no texto acima")
+                    }
                 }
             }
             .addOnFailureListener { e -> KmCertoLogger.log("OCR_FALHA: ${e.message}") }
@@ -704,9 +719,17 @@ object KmCertoLogger {
   private var logFile: File? = null
   private val sdf = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
   fun init(context: Context) {
-    val dir = context.getExternalFilesDir(null) ?: context.filesDir
-    logFile = File(dir, "kmcerto_debug.txt")
-    if (logFile?.exists() == true && logFile!!.length() > 1024 * 1024) logFile?.delete()
+    try {
+      val dir = android.os.Environment.getExternalStoragePublicDirectory(
+        android.os.Environment.DIRECTORY_DOWNLOADS
+      )
+      dir.mkdirs()
+      logFile = File(dir, "kmcerto_debug.txt")
+      if (logFile?.exists() == true && logFile!!.length() > 1024 * 1024) logFile?.delete()
+    } catch (_: Throwable) {
+      val dir = context.getExternalFilesDir(null) ?: context.filesDir
+      logFile = File(dir, "kmcerto_debug.txt")
+    }
   }
   fun log(message: String) {
     val time = sdf.format(Date())
