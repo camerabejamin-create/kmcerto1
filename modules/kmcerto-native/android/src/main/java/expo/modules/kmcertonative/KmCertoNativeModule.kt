@@ -45,6 +45,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicReference
 
 class KmCertoNativeModule : Module() {
   override fun definition() = ModuleDefinition {
@@ -558,8 +559,12 @@ object KmCertoScreenCapture {
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
-    @Volatile
-    private var isCapturing = false
+    
+    // =====================================================================
+    // CAPTURA CONTÍNUA (ANDROID 14+): Agora mantemos um fluxo de imagens
+    // ativo para evitar que o Android invalide o token por uso múltiplo.
+    // =====================================================================
+    private val lastBitmap = AtomicReference<Bitmap?>(null)
 
     fun isProjectionAlive(): Boolean = mediaProjection != null
 
@@ -579,29 +584,17 @@ object KmCertoScreenCapture {
         projection.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
                 KmCertoLogger.log("CAPTURA DE TELA: Token expirado")
-                mediaProjection = null
+                releaseProjection()
                 KmCertoRuntime.setScreenCaptureGranted(context, false)
             }
         }, Handler(Looper.getMainLooper()))
+        
+        // Inicia o fluxo contínuo de captura
+        startContinuousCapture(context)
     }
 
-    fun releaseProjection() {
-        try {
-            virtualDisplay?.release()
-            virtualDisplay = null
-            imageReader?.close()
-            imageReader = null
-            mediaProjection?.stop()
-            mediaProjection = null
-            isCapturing = false
-        } catch (_: Throwable) {}
-    }
-
-    fun captureAndProcess(context: Context, packageName: String) {
-        if (isCapturing) return
+    private fun startContinuousCapture(context: Context) {
         val projection = mediaProjection ?: return
-        isCapturing = true
-
         try {
             val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
             val metrics = android.util.DisplayMetrics()
@@ -612,6 +605,7 @@ object KmCertoScreenCapture {
             val height = metrics.heightPixels
             val density = metrics.densityDpi
 
+            // Criamos o VirtualDisplay APENAS UMA VEZ (Regra do Android 14)
             imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
             virtualDisplay = projection.createVirtualDisplay(
                 "KmCertoCapture", width, height, density,
@@ -619,9 +613,9 @@ object KmCertoScreenCapture {
                 imageReader?.surface, null, null
             )
 
-            Handler(Looper.getMainLooper()).postDelayed({
+            imageReader?.setOnImageAvailableListener({ reader ->
                 try {
-                    val image = imageReader?.acquireLatestImage()
+                    val image = reader.acquireLatestImage()
                     if (image != null) {
                         val planes = image.planes
                         val buffer = planes[0].buffer
@@ -630,22 +624,42 @@ object KmCertoScreenCapture {
                         val rowPadding = rowStride - pixelStride * width
                         val bitmap = Bitmap.createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
                         bitmap.copyPixelsFromBuffer(buffer)
+                        
+                        // Guardamos o último frame para o OCR usar quando precisar
+                        val old = lastBitmap.getAndSet(bitmap)
+                        old?.recycle()
+                        
                         image.close()
-                        processBitmap(bitmap, context, packageName)
                     }
-                } catch (e: Exception) {
-                    KmCertoLogger.log("CAPTURA ERRO: ${e.message}")
-                } finally {
-                    virtualDisplay?.release()
-                    virtualDisplay = null
-                    imageReader?.close()
-                    imageReader = null
-                    isCapturing = false
-                }
-            }, 500)
+                } catch (_: Exception) {}
+            }, Handler(Looper.getMainLooper()))
+            
+            KmCertoLogger.log("CAPTURA DE TELA: Fluxo contínuo iniciado")
         } catch (e: Exception) {
-            KmCertoLogger.log("CAPTURA ERRO INIT: ${e.message}")
-            isCapturing = false
+            KmCertoLogger.log("CAPTURA DE TELA ERRO FLUXO: ${e.message}")
+        }
+    }
+
+    fun releaseProjection() {
+        try {
+            virtualDisplay?.release()
+            virtualDisplay = null
+            imageReader?.close()
+            imageReader = null
+            mediaProjection?.stop()
+            mediaProjection = null
+            val old = lastBitmap.getAndSet(null)
+            old?.recycle()
+        } catch (_: Throwable) {}
+    }
+
+    fun captureAndProcess(context: Context, packageName: String) {
+        // No Android 14+, apenas pegamos o último frame do fluxo contínuo
+        val bitmap = lastBitmap.get()
+        if (bitmap != null) {
+            processBitmap(bitmap, context, packageName)
+        } else {
+            KmCertoLogger.log("OCR_ERRO: Nenhum frame disponível no fluxo")
         }
     }
 
