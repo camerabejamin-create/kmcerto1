@@ -29,7 +29,6 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.text.TextUtils
 import android.util.Log
-import android.util.TypedValue
 import android.view.Gravity
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -43,11 +42,9 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import org.json.JSONObject
 import java.io.File
-import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.absoluteValue
 
 class KmCertoNativeModule : Module() {
   override fun definition() = ModuleDefinition {
@@ -397,19 +394,12 @@ object KmCertoOfferParser {
 
 class KmCertoAccessibilityService : AccessibilityService() {
   private var wakeLock: PowerManager.WakeLock? = null
-
-  // =====================================================================
-  // CONTROLE DE FLOOD: Impede que o OCR seja chamado centenas de vezes
-  // por segundo. O Accessibility Service recebe eventos a cada ~10ms,
-  // mas o OCR só precisa rodar a cada 10 segundos no máximo.
-  // =====================================================================
   private var lastOcrAttemptTime: Long = 0L
   private var ocrNoPermissionLogged: Boolean = false
+  private var lastTextProcessTime: Long = 0L
 
   companion object {
-    // Intervalo mínimo entre tentativas de OCR (10 segundos)
     private const val OCR_COOLDOWN_MS = 10_000L
-    // Intervalo mínimo entre processamentos de texto por acessibilidade (1 segundo)
     private const val TEXT_COOLDOWN_MS = 1_000L
 
     fun isEnabled(context: Context): Boolean {
@@ -424,8 +414,6 @@ class KmCertoAccessibilityService : AccessibilityService() {
       return false
     }
   }
-
-  private var lastTextProcessTime: Long = 0L
 
   override fun onServiceConnected() {
     super.onServiceConnected()
@@ -474,8 +462,6 @@ class KmCertoAccessibilityService : AccessibilityService() {
     if (!KmCertoRuntime.supportsPackage(packageName)) return
 
     val now = System.currentTimeMillis()
-
-    // Cooldown para processamento de texto (1 segundo)
     if (now - lastTextProcessTime < TEXT_COOLDOWN_MS) return
     lastTextProcessTime = now
 
@@ -501,26 +487,17 @@ class KmCertoAccessibilityService : AccessibilityService() {
       processText(text, packageName)
     }
     
-    // =====================================================================
-    // OCR via MediaProjection: Só tenta se:
-    // 1. O pacote é Uber ou 99 (que podem precisar de OCR)
-    // 2. O texto da acessibilidade está vazio (fallback)
-    // 3. O cooldown de 10 segundos passou
-    // 4. O mediaProjection está realmente disponível em memória
-    // =====================================================================
     val needsOcr = packageName.contains("uber") || packageName.contains("app99")
     if (needsOcr && text.isBlank()) {
       if (now - lastOcrAttemptTime >= OCR_COOLDOWN_MS) {
         lastOcrAttemptTime = now
         
         if (KmCertoScreenCapture.isProjectionAlive()) {
-          // Token de MediaProjection está vivo, pode capturar
           ocrNoPermissionLogged = false
           KmCertoScreenCapture.captureAndProcess(this, packageName)
         } else {
-          // Token não está disponível — logar apenas UMA VEZ para não flood
           if (!ocrNoPermissionLogged) {
-            KmCertoLogger.log("OCR_INFO: MediaProjection não disponível. O texto será lido apenas via acessibilidade. Para ativar OCR, conceda a permissão de captura de tela no app.")
+            KmCertoLogger.log("OCR_INFO: MediaProjection não disponível em memória. Tentando reconectar...")
             ocrNoPermissionLogged = true
           }
         }
@@ -530,18 +507,10 @@ class KmCertoAccessibilityService : AccessibilityService() {
 
   private fun collectTextRecursive(node: AccessibilityNodeInfo?, out: StringBuilder) {
     if (node == null) return
-    
     val text = node.text?.toString()
     val contentDesc = node.contentDescription?.toString()
-    val viewId = node.viewIdResourceName
-    
-    if (!text.isNullOrBlank()) {
-      out.append(text).append(" ")
-    }
-    if (!contentDesc.isNullOrBlank()) {
-      out.append(contentDesc).append(" ")
-    }
-
+    if (!text.isNullOrBlank()) out.append(text).append(" ")
+    if (!contentDesc.isNullOrBlank()) out.append(contentDesc).append(" ")
     for (i in 0 until node.childCount) {
       collectTextRecursive(node.getChild(i), out)
     }
@@ -550,7 +519,6 @@ class KmCertoAccessibilityService : AccessibilityService() {
   private fun processText(text: String, packageName: String) {
     val minimumPerKm = KmCertoRuntime.getMinimumPerKm(this)
     val sourceApp = KmCertoRuntime.sourceLabel(packageName)
-    
     val offer = KmCertoOfferParser.parseFromText(text, minimumPerKm, sourceApp)
     if (offer != null) {
       KmCertoOverlayService.show(this, offer)
@@ -565,22 +533,7 @@ class KmCertoAccessibilityService : AccessibilityService() {
   }
 }
 
-// =====================================================================
-// SERVIÇO DEDICADO PARA CAPTURA DE TELA (mediaProjection)
-// 
-// REGRA DO ANDROID 14+ (documentação oficial):
-// 1. O usuário aceita a permissão (onActivityResult)
-// 2. PRIMEIRO: iniciar este Service e chamar startForeground() com MEDIA_PROJECTION
-// 3. SÓ DEPOIS: chamar getMediaProjection() para obter o token
-//
-// Se a ordem for invertida, o Android CANCELA o token silenciosamente.
-//
-// Este service usa START_STICKY para que o Android o reinicie se for morto.
-// Porém, o token de MediaProjection NÃO sobrevive a reinícios — o usuário
-// precisará conceder a permissão novamente se o service for destruído.
-// =====================================================================
 class KmCertoScreenCaptureService : Service() {
-
     companion object {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
@@ -591,20 +544,13 @@ class KmCertoScreenCaptureService : Service() {
     override fun onCreate() {
         super.onCreate()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "KmCerto Captura de Tela",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Notificação para captura de tela OCR"
-            }
+            val channel = NotificationChannel(CHANNEL_ID, "KmCerto Captura de Tela", NotificationManager.IMPORTANCE_LOW)
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // PASSO 2: Chamar startForeground() ANTES de getMediaProjection()
         val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
         } else {
@@ -623,7 +569,6 @@ class KmCertoScreenCaptureService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
-        // PASSO 3: Agora que o foreground service está rodando, obter o MediaProjection token
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED) ?: Activity.RESULT_CANCELED
         val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
@@ -640,37 +585,22 @@ class KmCertoScreenCaptureService : Service() {
                     KmCertoScreenCapture.onProjectionReady(projection, this)
                     KmCertoRuntime.setScreenCaptureGranted(this, true)
                     KmCertoLogger.init(this)
-                    KmCertoLogger.log("CAPTURA DE TELA: Permissão concedida e serviço ativo com sucesso")
+                    KmCertoLogger.log("CAPTURA DE TELA: Token obtido com sucesso")
                 } else {
-                    KmCertoLogger.init(this)
                     KmCertoLogger.log("CAPTURA DE TELA: getMediaProjection retornou null")
-                    KmCertoRuntime.setScreenCaptureGranted(this, false)
                     stopSelf()
                 }
             } catch (e: Exception) {
-                KmCertoLogger.init(this)
                 KmCertoLogger.log("CAPTURA DE TELA ERRO: ${e.message}")
-                KmCertoRuntime.setScreenCaptureGranted(this, false)
                 stopSelf()
             }
+        } else if (intent == null || !intent.hasExtra(EXTRA_RESULT_CODE)) {
+            // Reiniciado pelo sistema
         } else {
-            // Se não tem resultCode/data (ex: service reiniciado pelo Android após ser morto),
-            // não temos como recriar o token. Apenas manter o service vivo.
-            if (intent == null || !intent.hasExtra(EXTRA_RESULT_CODE)) {
-                KmCertoLogger.init(this)
-                KmCertoLogger.log("CAPTURA DE TELA: Service reiniciado sem token. OCR indisponível até nova permissão.")
-                // Marcar como não concedido já que o token morreu
-                KmCertoRuntime.setScreenCaptureGranted(this, false)
-                stopSelf()
-            } else {
-                KmCertoLogger.init(this)
-                KmCertoLogger.log("CAPTURA DE TELA: Usuário negou a permissão")
-                KmCertoRuntime.setScreenCaptureGranted(this, false)
-                stopSelf()
-            }
+            KmCertoLogger.log("CAPTURA DE TELA: Permissão negada")
+            stopSelf()
         }
 
-        // START_STICKY: O Android reinicia o service se for morto, mas sem o token original
         return START_STICKY
     }
 
@@ -683,22 +613,20 @@ class KmCertoScreenCaptureService : Service() {
 }
 
 object KmCertoScreenCapture {
+    // =====================================================================
+    // TOKEN GLOBAL (STATIC): Agora o token é compartilhado entre todos os
+    // serviços do app, garantindo que o AccessibilityService consiga usá-lo.
+    // =====================================================================
+    @Volatile
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     @Volatile
     private var isCapturing = false
 
-    /**
-     * Verifica se o token de MediaProjection está realmente vivo em memória.
-     * Diferente de hasPermission(), que verifica o SharedPreferences.
-     */
-    fun isProjectionAlive(): Boolean {
-        return mediaProjection != null
-    }
+    fun isProjectionAlive(): Boolean = mediaProjection != null
 
     fun hasPermission(context: Context): Boolean {
-        // Verificar se o token está vivo OU se foi concedido anteriormente
         return mediaProjection != null || KmCertoRuntime.isScreenCaptureGranted(context)
     }
 
@@ -709,26 +637,12 @@ object KmCertoScreenCapture {
         context.startActivity(intent)
     }
 
-    /**
-     * Chamado pelo KmCertoScreenCaptureService DEPOIS que startForeground() já foi executado.
-     * Neste ponto o token é válido e pode ser usado.
-     */
     fun onProjectionReady(projection: MediaProjection, context: Context) {
-        // Liberar projeção anterior se existir
-        if (mediaProjection != null) {
-            try { mediaProjection?.stop() } catch (_: Throwable) {}
-        }
         mediaProjection = projection
         projection.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
-                KmCertoLogger.log("CAPTURA DE TELA: MediaProjection encerrada pelo sistema")
+                KmCertoLogger.log("CAPTURA DE TELA: Token expirado")
                 mediaProjection = null
-                virtualDisplay?.release()
-                virtualDisplay = null
-                imageReader?.close()
-                imageReader = null
-                isCapturing = false
-                // Marcar como não concedido já que o token morreu
                 KmCertoRuntime.setScreenCaptureGranted(context, false)
             }
         }, Handler(Looper.getMainLooper()))
@@ -747,7 +661,6 @@ object KmCertoScreenCapture {
     }
 
     fun captureAndProcess(context: Context, packageName: String) {
-        // Proteção dupla: verificar se não está capturando E se o token existe
         if (isCapturing) return
         val projection = mediaProjection ?: return
         isCapturing = true
@@ -778,11 +691,9 @@ object KmCertoScreenCapture {
                         val pixelStride = planes[0].pixelStride
                         val rowStride = planes[0].rowStride
                         val rowPadding = rowStride - pixelStride * width
-                        
                         val bitmap = Bitmap.createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
                         bitmap.copyPixelsFromBuffer(buffer)
                         image.close()
-                        
                         processBitmap(bitmap, context, packageName)
                     }
                 } catch (e: Exception) {
@@ -797,10 +708,6 @@ object KmCertoScreenCapture {
             }, 500)
         } catch (e: Exception) {
             KmCertoLogger.log("CAPTURA ERRO INIT: ${e.message}")
-            virtualDisplay?.release()
-            virtualDisplay = null
-            imageReader?.close()
-            imageReader = null
             isCapturing = false
         }
     }
@@ -808,7 +715,6 @@ object KmCertoScreenCapture {
     private fun processBitmap(bitmap: Bitmap, context: Context, packageName: String) {
         val image = InputImage.fromBitmap(bitmap, 0)
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        
         recognizer.process(image)
             .addOnSuccessListener { visionText ->
                 val text = visionText.text
@@ -816,27 +722,13 @@ object KmCertoScreenCapture {
                     val minimumPerKm = KmCertoRuntime.getMinimumPerKm(context)
                     val sourceApp = KmCertoRuntime.sourceLabel(packageName)
                     val offer = KmCertoOfferParser.parseFromText(text, minimumPerKm, sourceApp)
-                    if (offer != null) {
-                        KmCertoOverlayService.show(context, offer)
-                    }
+                    if (offer != null) KmCertoOverlayService.show(context, offer)
                 }
             }
-            .addOnFailureListener { e ->
-                KmCertoLogger.log("OCR_FALHA: ${e.message}")
-            }
+            .addOnFailureListener { e -> KmCertoLogger.log("OCR_FALHA: ${e.message}") }
     }
 }
 
-// =====================================================================
-// ACTIVITY DE PERMISSÃO
-//
-// FLUXO CORRETO (Android 14+):
-// 1. onCreate: Pede permissão ao usuário via createScreenCaptureIntent()
-// 2. onActivityResult: Recebe o resultado
-// 3. Se OK: Inicia o KmCertoScreenCaptureService passando resultCode e data
-//    O SERVICE é quem vai chamar startForeground() e getMediaProjection()
-//    na ORDEM CORRETA exigida pelo Android 14+
-// =====================================================================
 class KmCertoPermissionActivity : Activity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -846,23 +738,12 @@ class KmCertoPermissionActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == 1001 && resultCode == RESULT_OK && data != null) {
-            // NÃO chamar getMediaProjection() aqui!
-            // Passar o resultCode e data para o Service, que vai:
-            // 1. Chamar startForeground() com MEDIA_PROJECTION
-            // 2. SÓ DEPOIS chamar getMediaProjection()
             val serviceIntent = Intent(this, KmCertoScreenCaptureService::class.java).apply {
                 putExtra(KmCertoScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
                 putExtra(KmCertoScreenCaptureService.EXTRA_RESULT_DATA, data)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(serviceIntent)
-            } else {
-                startService(serviceIntent)
-            }
-        } else {
-            // Usuário negou ou cancelou
-            KmCertoLogger.init(this)
-            KmCertoLogger.log("CAPTURA DE TELA: Usuário cancelou a permissão")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent)
+            else startService(serviceIntent)
         }
         finish()
     }
@@ -871,135 +752,91 @@ class KmCertoPermissionActivity : Activity() {
 object KmCertoLogger {
   private var logFile: File? = null
   private val sdf = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
-
   fun init(context: Context) {
     val dir = context.getExternalFilesDir(null) ?: context.filesDir
     logFile = File(dir, "kmcerto_debug.txt")
-    if (logFile?.exists() == true) {
-        if (logFile!!.length() > 1024 * 1024) logFile?.delete()
-    }
+    if (logFile?.exists() == true && logFile!!.length() > 1024 * 1024) logFile?.delete()
   }
-
   fun log(message: String) {
     val time = sdf.format(Date())
     val line = "[$time] $message\n"
     Log.d("KmCerto", message)
-    try {
-      logFile?.appendText(line)
-    } catch (_: Throwable) {}
+    try { logFile?.appendText(line) } catch (_: Throwable) {}
   }
-
   fun getLogPath(): String = logFile?.absolutePath ?: "N/A"
 }
 
 class KmCertoOverlayService : Service() {
     companion object {
         private var overlayView: LinearLayout? = null
-
         fun show(context: Context, data: OfferDecisionData) {
             Handler(Looper.getMainLooper()).post {
                 try {
                     val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
                     stop(context)
-
                     val view = LinearLayout(context).apply {
                         orientation = LinearLayout.VERTICAL
                         setPadding(40, 30, 40, 30)
-                        val shape = GradientDrawable().apply {
+                        background = GradientDrawable().apply {
                             setColor(Color.parseColor("#1D2026"))
                             cornerRadius = 40f
                             setStroke(4, Color.parseColor("#2D313A"))
                         }
-                        background = shape
                     }
-
-                    val header = LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                    }
-                    
-                    val sourceTxt = TextView(context).apply {
+                    val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+                    header.addView(TextView(context).apply {
                         text = data.sourceApp
                         setTextColor(Color.parseColor("#9CA3AF"))
                         textSize = 12f
                         typeface = Typeface.DEFAULT_BOLD
-                    }
-                    
-                    val statusTxt = TextView(context).apply {
+                    }, LinearLayout.LayoutParams(0, -2, 1f))
+                    header.addView(TextView(context).apply {
                         text = data.status
                         setTextColor(Color.WHITE)
                         textSize = 12f
                         typeface = Typeface.DEFAULT_BOLD
                         setPadding(20, 5, 20, 5)
-                        val bg = GradientDrawable().apply {
+                        background = GradientDrawable().apply {
                             setColor(Color.parseColor(data.statusColor))
                             cornerRadius = 12f
                         }
-                        background = bg
-                    }
-                    
-                    header.addView(sourceTxt, LinearLayout.LayoutParams(0, -2, 1f))
-                    header.addView(statusTxt)
+                    })
                     view.addView(header)
-
-                    val fareTxt = TextView(context).apply {
+                    view.addView(TextView(context).apply {
                         text = data.totalFareLabel
                         setTextColor(Color.WHITE)
                         textSize = 32f
                         typeface = Typeface.DEFAULT_BOLD
                         setPadding(0, 10, 0, 10)
-                    }
-                    view.addView(fareTxt)
-
-                    val metrics = LinearLayout(context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        setPadding(0, 10, 0, 0)
-                    }
-                    
-                    val perKmTxt = TextView(context).apply {
+                    })
+                    view.addView(TextView(context).apply {
                         text = "R$ ${String.format("%.2f", data.perKm)}/km"
                         setTextColor(Color.parseColor("#F5D400"))
                         textSize = 16f
                         typeface = Typeface.DEFAULT_BOLD
-                    }
-                    metrics.addView(perKmTxt)
-                    view.addView(metrics)
-
+                    })
                     val params = WindowManager.LayoutParams(
-                        WindowManager.LayoutParams.MATCH_PARENT,
+                        (context.resources.displayMetrics.widthPixels * 0.9).toInt(),
                         WindowManager.LayoutParams.WRAP_CONTENT,
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
                         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
                         PixelFormat.TRANSLUCENT
-                    ).apply {
-                        gravity = Gravity.TOP
-                        y = 100
-                        horizontalMargin = 0.05f
-                        width = (context.resources.displayMetrics.widthPixels * 0.9).toInt()
-                    }
-
+                    ).apply { gravity = Gravity.TOP; y = 100 }
                     wm.addView(view, params)
                     overlayView = view
                     Handler(Looper.getMainLooper()).postDelayed({ stop(context) }, 15000)
-                } catch (e: Exception) {
-                    KmCertoLogger.log("ERRO OVERLAY: ${e.message}")
-                }
+                } catch (e: Exception) { KmCertoLogger.log("ERRO OVERLAY: ${e.message}") }
             }
         }
-
         fun stop(context: Context) {
             Handler(Looper.getMainLooper()).post {
                 try {
                     val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                    overlayView?.let {
-                        wm.removeView(it)
-                        overlayView = null
-                    }
+                    overlayView?.let { wm.removeView(it); overlayView = null }
                 } catch (_: Exception) {}
             }
         }
     }
-
     override fun onBind(intent: Intent?): IBinder? = null
 }
 
