@@ -7,6 +7,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -27,6 +28,8 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.service.notification.NotificationListenerService
+import android.service.notification.StatusBarNotification
 import android.text.TextUtils
 import android.util.Log
 import android.view.Gravity
@@ -119,6 +122,22 @@ class KmCertoNativeModule : Module() {
       } catch (_: Throwable) {
         false
       }
+    }
+
+    AsyncFunction("isNotificationListenerEnabled") {
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      KmCertoNotificationService.isEnabled(context)
+    }
+
+    AsyncFunction("openNotificationListenerSettings") {
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      try {
+        val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+        true
+      } catch (_: Throwable) { false }
     }
 
     AsyncFunction("isMonitoringActive") {
@@ -698,6 +717,81 @@ class KmCertoPermissionActivity : Activity() {
         }
         finish()
     }
+}
+
+// ── NOTIFICATION LISTENER — lê notificações da 99 e Uber ──
+class KmCertoNotificationService : NotificationListenerService() {
+
+  companion object {
+    fun isEnabled(context: Context): Boolean {
+      val flat = Settings.Secure.getString(
+        context.contentResolver,
+        "enabled_notification_listeners"
+      ) ?: return false
+      val cn = ComponentName(context, KmCertoNotificationService::class.java)
+      return flat.contains(cn.flattenToString())
+    }
+  }
+
+  override fun onNotificationPosted(sbn: StatusBarNotification?) {
+    val pkg = sbn?.packageName ?: return
+    if (!KmCertoRuntime.supportsPackage(pkg)) return
+    if (!KmCertoRuntime.isMonitoringEnabled(this)) return
+
+    val extras = sbn.notification?.extras ?: return
+    val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+    val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+    val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
+    val fullText = "$title $text $bigText".trim()
+    if (fullText.isBlank()) return
+
+    KmCertoLogger.log("NOTIF pkg=$pkg | $fullText")
+
+    val hasValue = fullText.contains("R$") || fullText.contains("reais", ignoreCase = true)
+    val hasDistance = fullText.contains("km", ignoreCase = true)
+    if (!hasValue && !hasDistance) return
+
+    val minimumPerKm = KmCertoRuntime.getMinimumPerKm(this)
+    val sourceApp = KmCertoRuntime.sourceLabel(pkg)
+    val offer = KmCertoOfferParser.parseFromText(fullText, minimumPerKm, sourceApp)
+
+    if (offer != null) {
+      KmCertoLogger.log("NOTIF_OK ${offer.totalFareLabel} | ${offer.distanceKm}km | ${offer.status}")
+      KmCertoOverlayService.show(this, offer)
+    } else {
+      KmCertoLogger.log("NOTIF_FALHOU — texto: $fullText")
+    }
+  }
+
+  override fun onNotificationRemoved(sbn: StatusBarNotification?) = Unit
+}
+
+// ── LOGGER ──
+object KmCertoLogger {
+  private var logFile: File? = null
+  private val sdf = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
+
+  fun init(context: Context) {
+    try {
+      val dir = android.os.Environment.getExternalStoragePublicDirectory(
+        android.os.Environment.DIRECTORY_DOWNLOADS
+      )
+      dir.mkdirs()
+      logFile = File(dir, "kmcerto_debug.txt")
+      if (logFile?.exists() == true && logFile!!.length() > 1024 * 1024) logFile?.delete()
+    } catch (_: Throwable) {
+      val dir = context.getExternalFilesDir(null) ?: context.filesDir
+      logFile = File(dir, "kmcerto_debug.txt")
+    }
+  }
+
+  fun log(message: String) {
+    val line = "[${sdf.format(Date())}] $message\n"
+    Log.d("KmCerto", message)
+    try { logFile?.appendText(line) } catch (_: Throwable) {}
+  }
+
+  fun getLogPath(): String = logFile?.absolutePath ?: "N/A"
 }
 
 class KmCertoOverlayService : Service() {
