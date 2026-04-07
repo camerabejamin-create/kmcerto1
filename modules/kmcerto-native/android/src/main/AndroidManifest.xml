@@ -16,6 +16,17 @@
       android:exported="false"
       android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
+    <!-- Notification Listener — lê notificações da 99 e Uber -->
+    <service
+      android:name="expo.modules.kmcertonative.KmCertoNotificationService"
+      android:exported="true"
+      android:label="KmCerto Notificações"
+      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+      <intent-filter>
+        <action android:name="android.service.notification.NotificationListenerService" />
+      </intent-filter>
+    </service>
+
     <!-- Serviço DEDICADO para captura de tela (mediaProjection) -->
     <service
       android:name="expo.modules.kmcertonative.KmCertoScreenCaptureService"
