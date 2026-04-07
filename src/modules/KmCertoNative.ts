@@ -8,6 +8,7 @@ export type KmCertoPermissionStatus = {
   accessibilityGranted: boolean;
   batteryOptimizationIgnored: boolean;
   screenCaptureGranted: boolean;
+  notificationListenerEnabled: boolean;
 };
 
 export type KmCertoOverlayPayload = {
@@ -48,10 +49,12 @@ async function callBooleanMethod(method: keyof Pick<
   | "isAccessibilityServiceEnabled"
   | "isBatteryOptimizationIgnored"
   | "hasScreenCapturePermission"
+  | "isNotificationListenerEnabled"
   | "openOverlaySettings"
   | "openAccessibilitySettings"
   | "openBatteryOptimizationSettings"
   | "requestScreenCapturePermission"
+  | "openNotificationListenerSettings"
   | "startMonitoring"
   | "stopMonitoring"
   | "hideOverlay"
@@ -69,67 +72,38 @@ async function callBooleanMethod(method: keyof Pick<
 
 export async function getPermissionStatus(): Promise<KmCertoPermissionStatus> {
   if (Platform.OS !== "android") {
-    return { overlayGranted: false, accessibilityGranted: false, batteryOptimizationIgnored: false, screenCaptureGranted: false };
+    return { overlayGranted: false, accessibilityGranted: false, batteryOptimizationIgnored: false, screenCaptureGranted: false, notificationListenerEnabled: false };
   }
 
-  const [overlayGranted, accessibilityGranted, batteryOptimizationIgnored, screenCaptureGranted] = await Promise.all([
+  const [overlayGranted, accessibilityGranted, batteryOptimizationIgnored, screenCaptureGranted, notificationListenerEnabled] = await Promise.all([
     callBooleanMethod("isOverlayPermissionGranted"),
     callBooleanMethod("isAccessibilityServiceEnabled"),
     callBooleanMethod("isBatteryOptimizationIgnored"),
     callBooleanMethod("hasScreenCapturePermission"),
+    callBooleanMethod("isNotificationListenerEnabled"),
   ]);
 
-  return { overlayGranted, accessibilityGranted, batteryOptimizationIgnored, screenCaptureGranted };
+  return { overlayGranted, accessibilityGranted, batteryOptimizationIgnored, screenCaptureGranted, notificationListenerEnabled };
 }
 
-export function openOverlaySettings() {
-  return callBooleanMethod("openOverlaySettings");
-}
-
-export function openAccessibilitySettings() {
-  return callBooleanMethod("openAccessibilitySettings");
-}
-
-export function openBatteryOptimizationSettings() {
-  return callBooleanMethod("openBatteryOptimizationSettings");
-}
-
-export function requestScreenCapturePermission() {
-  return callBooleanMethod("requestScreenCapturePermission");
-}
-
-export function startMonitoring() {
-  return callBooleanMethod("startMonitoring");
-}
-
-export function stopMonitoring() {
-  return callBooleanMethod("stopMonitoring");
-}
-
-export function hideOverlay() {
-  return callBooleanMethod("hideOverlay");
-}
-
-export function isMonitoringActive() {
-  return callBooleanMethod("isMonitoringActive");
-}
+export function openOverlaySettings() { return callBooleanMethod("openOverlaySettings"); }
+export function openAccessibilitySettings() { return callBooleanMethod("openAccessibilitySettings"); }
+export function openBatteryOptimizationSettings() { return callBooleanMethod("openBatteryOptimizationSettings"); }
+export function requestScreenCapturePermission() { return callBooleanMethod("requestScreenCapturePermission"); }
+export function openNotificationListenerSettings() { return callBooleanMethod("openNotificationListenerSettings"); }
+export function startMonitoring() { return callBooleanMethod("startMonitoring"); }
+export function stopMonitoring() { return callBooleanMethod("stopMonitoring"); }
+export function hideOverlay() { return callBooleanMethod("hideOverlay"); }
+export function isMonitoringActive() { return callBooleanMethod("isMonitoringActive"); }
 
 export async function setNativeMinimumPerKm(value: number) {
   if (Platform.OS !== "android") return false;
-  try {
-    return Boolean(await KmCertoNativeModule.setMinimumPerKm(value));
-  } catch {
-    return false;
-  }
+  try { return Boolean(await KmCertoNativeModule.setMinimumPerKm(value)); } catch { return false; }
 }
 
 export async function getNativeMinimumPerKm() {
   if (Platform.OS !== "android") return 1.5;
-  try {
-    return Number(await KmCertoNativeModule.getMinimumPerKm()) || 1.5;
-  } catch {
-    return 1.5;
-  }
+  try { return Number(await KmCertoNativeModule.getMinimumPerKm()) || 1.5; } catch { return 1.5; }
 }
 
 export function showTestOverlay(payload?: KmCertoOverlayPayload) {
@@ -139,10 +113,8 @@ export function showTestOverlay(payload?: KmCertoOverlayPayload) {
 
 export function subscribeToOverlayUpdates(listener: (payload: KmCertoOverlayPayload) => void) {
   if (Platform.OS !== "android") return { remove: () => undefined };
-
   const subscription = KmCertoNativeModule.addListener("KmCertoOverlayData", (payload: KmCertoOverlayEventPayload) => {
     listener(normalizeOverlayPayload(payload));
   });
-
   return { remove: () => subscription.remove() };
 }
